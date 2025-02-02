@@ -1,0 +1,145 @@
+import numpy as np
+from matplotlib import pyplot as plt
+
+# Load MNIST dataset
+def load_images(file_path):
+    with open(file_path, 'rb') as f:
+        magic_number = int.from_bytes(f.read(4), 'big')
+        num_images = int.from_bytes(f.read(4), 'big')
+        rows = int.from_bytes(f.read(4), 'big')
+        cols = int.from_bytes(f.read(4), 'big')
+        images = np.frombuffer(f.read(), dtype=np.uint8).reshape(num_images, rows * cols)
+        return images
+
+def load_labels(file_path):
+    with open(file_path, 'rb') as f:
+        magic_number = int.from_bytes(f.read(4), 'big')
+        num_labels = int.from_bytes(f.read(4), 'big')
+        labels = np.frombuffer(f.read(), dtype=np.uint8)
+        return labels
+
+# Load dataset
+X_train = load_images(r"D:\Coding\python\MNIST _Letter_Classification\train-images.idx3-ubyte")
+Y_train = load_labels(r"D:\Coding\python\MNIST _Letter_Classification\train-labels.idx1-ubyte")
+X_test = load_images(r"D:\Coding\python\MNIST _Letter_Classification\t10k-images.idx3-ubyte")
+Y_test = load_labels(r"D:\Coding\python\MNIST _Letter_Classification\t10k-labels.idx1-ubyte")
+
+# Normalize data
+X_train = X_train.T / 255.
+X_test = X_test.T / 255.
+Y_train = Y_train.reshape(1, -1)
+Y_test = Y_test.reshape(1, -1)
+_, m_train = X_train.shape
+
+# One-hot encoding
+def one_hot(Y):
+    one_hot_Y = np.zeros((Y.size, Y.max() + 1))
+    one_hot_Y[np.arange(Y.size), Y] = 1
+    one_hot_Y = one_hot_Y.T
+    return one_hot_Y
+
+# Prediction and accuracy
+def get_predictions(A):
+    return np.argmax(A, axis=0)
+
+def get_accuracy(predictions, Y):
+    return np.sum(predictions == Y) / Y.size
+
+# Training Without Hidden Layer
+def init_params_no_hidden():
+    W = np.random.randn(10, 784) * np.sqrt(1 / 784)
+    b = np.zeros((10, 1))
+    return W, b
+
+def forward_prop_no_hidden(W, b, X):
+    Z = W.dot(X) + b
+    A = softmax(Z)
+    return Z, A
+
+def backward_prop_no_hidden(Z, A, W, X, Y):
+    one_hot_Y = one_hot(Y)
+    dZ = A - one_hot_Y
+    dW = 1 / m_train * dZ.dot(X.T)
+    db = 1 / m_train * np.sum(dZ, axis=1, keepdims=True)
+    return dW, db
+
+def update_params_no_hidden(W, b, dW, db, alpha):
+    W -= alpha * dW
+    b -= alpha * db
+    return W, b
+
+def gradient_descent_no_hidden(X, Y, alpha, iterations):
+    W, b = init_params_no_hidden()
+    for i in range(iterations):
+        Z, A = forward_prop_no_hidden(W, b, X)
+        dW, db = backward_prop_no_hidden(Z, A, W, X, Y)
+        W, b = update_params_no_hidden(W, b, dW, db, alpha)
+
+        if i % 10 == 0:
+            predictions = get_predictions(A)
+            print(f"No Hidden Layer - Iteration {i}: Accuracy = {get_accuracy(predictions, Y):.4f}")
+    return W, b
+
+# Part 2: Training With Hidden Layer
+def init_params():
+    W1 = np.random.randn(64, 784) * np.sqrt(2 / 784)
+    b1 = np.zeros((64, 1))
+    W2 = np.random.randn(10, 64) * np.sqrt(2 / 64)
+    b2 = np.zeros((10, 1))
+    return W1, b1, W2, b2
+
+def ReLU(Z):
+    return np.maximum(0.01 * Z, Z)
+
+def ReLU_deriv(Z):
+    return np.where(Z > 0, 1, 0.01)
+
+def softmax(Z):
+    A = np.exp(Z) / np.sum(np.exp(Z), axis=0)
+    return A
+
+def forward_prop(W1, b1, W2, b2, X):
+    Z1 = W1.dot(X) + b1
+    A1 = ReLU(Z1)
+    Z2 = W2.dot(A1) + b2
+    A2 = softmax(Z2)
+    return Z1, A1, Z2, A2
+
+def backward_prop(Z1, A1, Z2, A2, W1, W2, X, Y):
+    one_hot_Y = one_hot(Y)
+    dZ2 = A2 - one_hot_Y
+    dW2 = 1 / m_train * dZ2.dot(A1.T)
+    db2 = 1 / m_train * np.sum(dZ2, axis=1, keepdims=True)
+    dZ1 = W2.T.dot(dZ2) * ReLU_deriv(Z1)
+    dW1 = 1 / m_train * dZ1.dot(X.T)
+    db1 = 1 / m_train * np.sum(dZ1, axis=1, keepdims=True)
+    return dW1, db1, dW2, db2
+
+def update_params(W1, b1, W2, b2, dW1, db1, dW2, db2, alpha):
+    W1 -= alpha * dW1
+    b1 -= alpha * db1
+    W2 -= alpha * dW2
+    b2 -= alpha * db2
+    return W1, b1, W2, b2
+
+def gradient_descent(X, Y, alpha, iterations):
+    W1, b1, W2, b2 = init_params()
+    for i in range(iterations):
+        Z1, A1, Z2, A2 = forward_prop(W1, b1, W2, b2, X)
+        dW1, db1, dW2, db2 = backward_prop(Z1, A1, Z2, A2, W1, W2, X, Y)
+        W1, b1, W2, b2 = update_params(W1, b1, W2, b2, dW1, db1, dW2, db2, alpha)
+
+        if i % 10 == 0:
+            predictions = get_predictions(A2)
+            print(f"With Hidden Layer - Iteration {i}: Accuracy = {get_accuracy(predictions, Y):.4f}")
+    return W1, b1, W2, b2
+
+# Train and Compare
+alpha = 0.1  # Learning rate
+iterations = 300  # Number of iterations
+
+print("Training Without Hidden Layer:")
+W_no_hidden, b_no_hidden = gradient_descent_no_hidden(X_train, Y_train, alpha, iterations)
+
+print("\nTraining With Hidden Layer:")
+W1, b1, W2, b2 = gradient_descent(X_train, Y_train, alpha, iterations)
