@@ -1,0 +1,182 @@
+# Import Necessary Libraries
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from collections import Counter
+import nltk
+import time
+from nltk.tokenize import word_tokenize
+
+# Ensure required NLTK resources are downloaded
+nltk.download('punkt')
+nltk.download('punkt_tab') # Download the punkt_tab resource
+
+# Load Dataset (Ensure Correct Column Name)
+df = pd.read_csv("poems-100.csv")
+
+# Verify column name (must be 'text')
+if 'text' not in df.columns:
+    raise ValueError("CSV file must have a 'text' column.")
+
+# Preprocess Text Data
+text = " ".join(df['text'].astype(str).tolist())  # Join all poems
+words = word_tokenize(text.lower())  # Tokenize & lowercase
+
+# Create Vocabulary
+word_counts = Counter(words)
+vocab = sorted(word_counts.keys())  # Sorted unique words
+word2idx = {word: i for i, word in enumerate(vocab)}
+idx2word = {i: word for word, i in word2idx.items()}
+
+vocab_size = len(vocab)
+print(f" Vocabulary Size: {vocab_size}")
+
+# Define Sequence Length
+sequence_length = 10  # Increased for better context
+
+# One-Hot Encoding Function
+def one_hot_encode(word, vocab_size, word2idx):
+    vector = torch.zeros(vocab_size)
+    if word in word2idx:
+        vector[word2idx[word]] = 1
+    return vector
+
+# Prepare Data for One-Hot Encoding
+def prepare_one_hot_data(words, vocab_size, word2idx, sequence_length):
+    train_X, train_y = [], []
+    for i in range(len(words) - sequence_length):
+        context = words[i:i+sequence_length]
+        target = words[i+sequence_length]
+        train_X.append(torch.stack([one_hot_encode(w, vocab_size, word2idx) for w in context]))
+        train_y.append(word2idx[target])
+    return torch.stack(train_X), torch.tensor(train_y)
+
+train_X_one_hot, train_y_one_hot = prepare_one_hot_data(words, vocab_size, word2idx, sequence_length)
+
+# Prepare Data for Word Embeddings
+def prepare_indexed_data(words, word2idx, sequence_length):
+    train_X, train_y = [], []
+    for i in range(len(words) - sequence_length):
+        context = words[i:i+sequence_length]
+        target = words[i+sequence_length]
+        train_X.append([word2idx[w] for w in context])
+        train_y.append(word2idx[target])
+    return torch.tensor(train_X), torch.tensor(train_y)
+
+train_X_index, train_y_index = prepare_indexed_data(words, word2idx, sequence_length)
+
+# Define RNN Model
+class RNNModel(nn.Module):
+    def __init__(self, input_size, hidden_dim, output_size, num_layers, dropout=0.3):
+        super(RNNModel, self).__init__()
+        self.rnn = nn.RNN(input_size, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_dim, output_size)
+
+    def forward(self, x):
+        _, hidden = self.rnn(x)
+        return self.fc(hidden[-1])
+
+# Define LSTM Model
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_dim, output_size, num_layers, dropout=0.3):
+        super(LSTMModel, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_dim, output_size)
+
+    def forward(self, x):
+        _, (hidden, _) = self.lstm(x)
+        return self.fc(hidden[-1])
+
+# Define RNN Model with Embeddings
+class RNNEmbeddingModel(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, output_size, num_layers, dropout=0.3):
+        super(RNNEmbeddingModel, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.rnn = nn.RNN(embed_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_dim, output_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        _, hidden = self.rnn(x)
+        return self.fc(hidden[-1])
+
+# Define LSTM Model with Embeddings
+class LSTMEmbeddingModel(nn.Module):
+    def __init__(self, vocab_size, embed_dim, hidden_dim, output_size, num_layers, dropout=0.3):
+        super(LSTMEmbeddingModel, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.lstm = nn.LSTM(embed_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_dim, output_size)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        _, (hidden, _) = self.lstm(x)
+        return self.fc(hidden[-1])
+
+# Train Function (Tracks Accuracy & Training Time)
+def train_model(model, train_X, train_y, num_epochs=20, batch_size=32, learning_rate=0.001):
+    dataset = torch.utils.data.TensorDataset(train_X, train_y)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    total_start_time = time.time()
+    all_losses = []
+
+    for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        total_loss, correct, total = 0, 0, 0
+        for inputs, targets in dataloader:
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+
+            predicted = torch.argmax(outputs, dim=1)
+            correct += (predicted == targets).sum().item()
+            total += targets.size(0)
+
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        accuracy = correct / total
+        avg_loss = total_loss / len(dataloader)
+        all_losses.append(avg_loss)
+
+        print(f" Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%, Time: {time.time() - epoch_start_time:.2f}s")
+
+    total_training_time = time.time() - total_start_time
+    return sum(all_losses) / len(all_losses), total_training_time
+
+# Hyperparameters
+hidden_dim = 128
+num_layers = 2
+embed_dim = 100  # Increased embedding size for better representation
+
+# Train and Compare Models
+results = {}
+
+models = {
+    "RNN One-Hot": RNNModel(vocab_size, hidden_dim, vocab_size, num_layers),
+    "LSTM One-Hot": LSTMModel(vocab_size, hidden_dim, vocab_size, num_layers),
+    "RNN Embeddings": RNNEmbeddingModel(vocab_size, embed_dim, hidden_dim, vocab_size, num_layers),
+    "LSTM Embeddings": LSTMEmbeddingModel(vocab_size, embed_dim, hidden_dim, vocab_size, num_layers),
+}
+
+for name, model in models.items():
+    print(f"\n Training {name}...")
+    if "One-Hot" in name:
+        avg_loss, train_time = train_model(model, train_X_one_hot, train_y_one_hot)
+    else:
+        avg_loss, train_time = train_model(model, train_X_index, train_y_index)
+
+    results[name] = {"Average Loss": avg_loss, "Training Time (s)": train_time}
+
+# Print Results
+print("\n Final Results:")
+for model, metrics in results.items():
+    print(f"{model}: Average Loss = {metrics['Average Loss']:.4f}, Training Time = {metrics['Training Time (s)']:.2f}s")
